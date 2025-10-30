@@ -71,6 +71,17 @@ export interface RoleProps {
    * @default - credentials are only stored in Secrets Manager
    */
   readonly parameterPrefix?: string
+
+  /**
+   * Enable IAM database authentication for this role.
+   *
+   * When enabled, the role will be created without a password and
+   * granted the rds_iam role in PostgreSQL. No AWS Secrets Manager
+   * secret will be created.
+   *
+   * @default false - password-based authentication with Secrets Manager
+   */
+  readonly iamAuthentication?: boolean
 }
 
 // Private Parameters construct (not exported)
@@ -135,8 +146,10 @@ export class Role extends Construct {
 
   /**
    * The generated secret.
+   *
+   * Only available when iamAuthentication is false (default).
    */
-  public readonly secret: ISecret
+  public readonly secret?: ISecret
 
   constructor(scope: Construct, id: string, props: RoleProps) {
     if (props.database && props.databaseName) {
@@ -147,6 +160,12 @@ export class Role extends Construct {
       // For now, let's assume it's allowed but the secret won't have a dbname.
       // If it should be required, uncomment the line below:
       throw "Specify either database or databaseName"
+    }
+    if (props.iamAuthentication && props.parameterPrefix) {
+      throw "Cannot use parameterPrefix with iamAuthentication - IAM roles do not have passwords"
+    }
+    if (props.iamAuthentication && (props.encryptionKey || props.secretName)) {
+      throw "Cannot use encryptionKey or secretName with iamAuthentication - no secret is created for IAM roles"
     }
     super(scope, id)
 
@@ -162,28 +181,31 @@ export class Role extends Construct {
       ? (props.provider.cluster as IDatabaseCluster).clusterIdentifier
       : (props.provider.cluster as IDatabaseInstance).instanceIdentifier
 
-    this.secret = new Secret(this, "Secret", {
-      secretName: props.secretName,
-      encryptionKey: props.encryptionKey,
-      description: `Generated secret for postgres role ${props.roleName}`,
-      generateSecretString: {
-        passwordLength: 30, // Oracle password cannot have more than 30 characters
-        secretStringTemplate: JSON.stringify({
-          dbClusterIdentifier: identifier,
-          engine: props.provider.engine,
-          host: host,
-          port: port,
-          username: props.roleName,
-          dbname: props.database ? props.database.databaseName : props.databaseName,
-        }),
-        generateStringKey: "password",
-        excludeCharacters: " %+~`#$&*()|[]{}:;<>?!'/@\"\\",
-      },
-      removalPolicy: RemovalPolicy.DESTROY,
-    })
+    // Only create secret for password-based authentication
+    if (!props.iamAuthentication) {
+      this.secret = new Secret(this, "Secret", {
+        secretName: props.secretName,
+        encryptionKey: props.encryptionKey,
+        description: `Generated secret for postgres role ${props.roleName}`,
+        generateSecretString: {
+          passwordLength: 30, // Oracle password cannot have more than 30 characters
+          secretStringTemplate: JSON.stringify({
+            dbClusterIdentifier: identifier,
+            engine: props.provider.engine,
+            host: host,
+            port: port,
+            username: props.roleName,
+            dbname: props.database ? props.database.databaseName : props.databaseName,
+          }),
+          generateStringKey: "password",
+          excludeCharacters: " %+~`#$&*()|[]{}:;<>?!'/@\"\\",
+        },
+        removalPolicy: RemovalPolicy.DESTROY,
+      })
+    }
 
     // Create Parameters if parameterPrefix is provided
-    if (props.parameterPrefix) {
+    if (props.parameterPrefix && this.secret) {
       const paramData = {
         dbClusterIdentifier: identifier,
         engine: props.provider.engine,
@@ -206,16 +228,19 @@ export class Role extends Construct {
     const role = new CustomResourceRole(this, "PostgresRole", {
       provider: props.provider,
       roleName: props.roleName,
-      passwordArn: this.secret.secretArn,
+      passwordArn: this.secret?.secretArn,
       database: props.database,
       databaseName: props.databaseName,
+      iamAuthentication: props.iamAuthentication,
     })
-    role.node.addDependency(this.secret)
-    this.roleName = props.roleName
-    this.secret.grantRead(props.provider.handler)
-    if (this.secret.encryptionKey) {
-      // It seems we need to grant explicit permission
-      this.secret.encryptionKey.grantDecrypt(props.provider.handler)
+    if (this.secret) {
+      role.node.addDependency(this.secret)
+      this.secret.grantRead(props.provider.handler)
+      if (this.secret.encryptionKey) {
+        // It seems we need to grant explicit permission
+        this.secret.encryptionKey.grantDecrypt(props.provider.handler)
+      }
     }
+    this.roleName = props.roleName
   }
 }

@@ -53,107 +53,24 @@ export class PostgresqlEngine extends AbstractEngine {
   }
 
   async createRole(resourceId: string, props?: any): Promise<string[]> {
-    if (!props.PasswordArn) throw "No PasswordArn provided"
-    const password = await this.getPassword(props.PasswordArn)
-    if (password) {
-      const sql = [
-        "start transaction",
-        pgFormat("create role %I with login password %L", resourceId, password),
-      ]
-      if (props.DatabaseName) {
-        sql.push(
-          pgFormat(
-            `DO $$
-BEGIN
-  IF EXISTS (select from pg_database where datname = '%s' and datistemplate = false) THEN
-    grant connect on database %I to %I;
-  END IF;
-END$$;`,
-            props.DatabaseName,
-            props.DatabaseName,
-            resourceId
-          )
-        )
-      }
-      sql.push("commit")
-      return sql
-    } else {
-      throw `Cannot parse password from ${props.PasswordArn}`
+    const sql = ["start transaction"]
+
+    // IAM-based authentication
+    if (props.IamAuthentication) {
+      sql.push(pgFormat("create role %I with login", resourceId))
+      sql.push(pgFormat("grant rds_iam to %I", resourceId))
     }
-  }
-
-  async updateRole(
-    resourceId: string,
-    oldResourceId: string,
-    props?: any,
-    oldProps?: any
-  ): Promise<string[]> {
-    if (props?.PasswordArn) {
+    // Password-based authentication
+    else {
+      if (!props.PasswordArn) throw "No PasswordArn provided"
       const password = await this.getPassword(props.PasswordArn)
-      if (password) {
-        const sql = ["start transaction"]
-        if (oldResourceId !== resourceId) {
-          sql.push(pgFormat("alter role %I rename to %I", oldResourceId, resourceId))
-        }
-        sql.push(pgFormat("alter role %I with password %L", resourceId, password))
-        // Check if database name has changed
-        if (
-          oldProps?.DatabaseName &&
-          props.DatabaseName &&
-          oldProps.DatabaseName !== props.DatabaseName
-        ) {
-          // Revoke from old database
-          sql.push(
-            pgFormat(
-              `DO $$
-  BEGIN
-    IF EXISTS (select from pg_database where datname = '%s' and datistemplate = false) THEN
-      revoke connect on database %I from %I;
-    END IF;
-  END$$;`,
-              oldProps.DatabaseName,
-              oldProps.DatabaseName,
-              resourceId
-            )
-          )
-        }
-
-        if (props.DatabaseName) {
-          sql.push(
-            pgFormat("grant connect on database %I to %I", props.DatabaseName, resourceId)
-          )
-        }
-        sql.push("commit")
-        return sql
-      } else {
+      if (!password) {
         throw `Cannot parse password from ${props.PasswordArn}`
       }
-    } else {
-      const sql = ["start transaction"]
-      if (oldResourceId !== resourceId) {
-        sql.push(pgFormat("alter role %I rename to %I", oldResourceId, resourceId))
-      }
-      // Check if database name has changed
-      if (
-        oldProps?.DatabaseName &&
-        props.DatabaseName &&
-        oldProps.DatabaseName !== props.DatabaseName
-      ) {
-        // Revoke from old database
-        sql.push(
-          pgFormat(
-            `DO $$
-BEGIN
-  IF EXISTS (select from pg_database where datname = '%s' and datistemplate = false) THEN
-  revoke connect on database %I from %I;
-  END IF;
-END$$;`,
-            oldProps.DatabaseName,
-            oldProps.DatabaseName,
-            resourceId
-          )
-        )
-      }
+      sql.push(pgFormat("create role %I with login password %L", resourceId, password))
+    }
+
+    if (props.DatabaseName) {
       sql.push(
         pgFormat(
           `DO $$
@@ -167,9 +84,77 @@ END$$;`,
           resourceId
         )
       )
-      sql.push("commit")
-      return sql
     }
+    sql.push("commit")
+    return sql
+  }
+
+  async updateRole(
+    resourceId: string,
+    oldResourceId: string,
+    props?: any,
+    oldProps?: any
+  ): Promise<string[]> {
+    const sql = ["start transaction"]
+
+    // Rename role if needed
+    if (oldResourceId !== resourceId) {
+      sql.push(pgFormat("alter role %I rename to %I", oldResourceId, resourceId))
+    }
+
+    // Update password for password-based authentication
+    if (!props.IamAuthentication && props?.PasswordArn) {
+      const password = await this.getPassword(props.PasswordArn)
+      if (!password) {
+        throw `Cannot parse password from ${props.PasswordArn}`
+      }
+      sql.push(pgFormat("alter role %I with password %L", resourceId, password))
+    }
+
+    // Ensure rds_iam is granted for IAM authentication
+    if (props.IamAuthentication) {
+      sql.push(pgFormat("grant rds_iam to %I", resourceId))
+    }
+
+    // Check if database name has changed
+    if (
+      oldProps?.DatabaseName &&
+      props.DatabaseName &&
+      oldProps.DatabaseName !== props.DatabaseName
+    ) {
+      // Revoke from old database
+      sql.push(
+        pgFormat(
+          `DO $$
+BEGIN
+  IF EXISTS (select from pg_database where datname = '%s' and datistemplate = false) THEN
+    revoke connect on database %I from %I;
+  END IF;
+END$$;`,
+          oldProps.DatabaseName,
+          oldProps.DatabaseName,
+          resourceId
+        )
+      )
+    }
+
+    if (props.DatabaseName) {
+      sql.push(
+        pgFormat(
+          `DO $$
+BEGIN
+  IF EXISTS (select from pg_database where datname = '%s' and datistemplate = false) THEN
+    grant connect on database %I to %I;
+  END IF;
+END$$;`,
+          props.DatabaseName,
+          props.DatabaseName,
+          resourceId
+        )
+      )
+    }
+    sql.push("commit")
+    return sql
   }
 
   deleteRole(resourceId: string, props?: any): string[] {

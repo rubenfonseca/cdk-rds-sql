@@ -20,6 +20,7 @@ export interface RoleProperties extends CommonProperties {
   readonly Resource: RdsSqlResource.ROLE
   readonly PasswordArn?: string
   readonly DatabaseName?: string
+  readonly IamAuthentication?: boolean
 }
 
 // Schema specific properties

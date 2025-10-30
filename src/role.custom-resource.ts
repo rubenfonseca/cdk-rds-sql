@@ -19,8 +19,10 @@ export interface RoleProps {
    * A new secret is created for this user.
    *
    * Optionally encrypt it with the given key.
+   *
+   * Not required when using IAM authentication.
    */
-  readonly passwordArn: string
+  readonly passwordArn?: string
 
   /**
    * Optional database this user is expected to use.
@@ -39,6 +41,13 @@ export interface RoleProps {
    * @default no connection to any database is granted
    */
   readonly databaseName?: string
+
+  /**
+   * Enable IAM database authentication for this role.
+   *
+   * @default false - password-based authentication
+   */
+  readonly iamAuthentication?: boolean
 }
 
 export class Role extends CustomResource {
@@ -53,6 +62,7 @@ export class Role extends CustomResource {
         SecretArn: props.provider.secret.secretArn,
         PasswordArn: props.passwordArn,
         DatabaseName: props.database ? props.database.databaseName : props.databaseName,
+        IamAuthentication: props.iamAuthentication ?? false,
       },
     })
     this.node.addDependency(props.provider)

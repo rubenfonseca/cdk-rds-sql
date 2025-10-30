@@ -168,6 +168,34 @@ to do this better:
   could lose access to the database at random times, such as when a
   container is restarted.
 
+### IAM Database Authentication
+
+For PostgreSQL roles, you can enable IAM database authentication by setting
+`iamAuthentication: true`. This creates a role without a password that uses
+AWS IAM authentication instead:
+
+```ts
+import { Role } from "cdk-rds-sql"
+
+const iamRole = new Role(this, "IamRole", {
+  provider: provider,
+  roleName: "myiamrole",
+  databaseName: "mydb",
+  iamAuthentication: true,
+})
+```
+
+When IAM authentication is enabled:
+- No AWS Secrets Manager secret is created
+- The PostgreSQL role is created without a password
+- The role is granted the `rds_iam` role in PostgreSQL
+- You must use IAM authentication tokens to connect to the database
+
+**Important**:
+- The `iamAuthentication` option cannot be combined with `parameterPrefix`, `encryptionKey`, or `secretName`
+- Your RDS cluster/instance must have IAM database authentication enabled
+- Applications connecting with this role must generate IAM auth tokens using AWS SDK
+
 ## Database
 
 Create a database as follows:
