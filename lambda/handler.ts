@@ -41,6 +41,7 @@ export const handler = async (
   const resource: RdsSqlResource = event.ResourceProperties.Resource
   const resourceId = event.ResourceProperties.ResourceId
   const databaseName = event.ResourceProperties.DatabaseName
+  const iamAuthentication = event.ResourceProperties.IamAuthentication ?? false
 
   if (!Object.values(RdsSqlResource).includes(resource)) {
     throw `Resource type '${resource}' not recognised.`
@@ -72,6 +73,16 @@ export const handler = async (
   if (!secret.SecretString)
     throw `No secret string in ${event.ResourceProperties.SecretArn}`
   const secretValues = JSON.parse(secret.SecretString)
+
+  // For IAM authentication, validate that PasswordArn is not provided
+  if (iamAuthentication && resource === RdsSqlResource.ROLE && event.ResourceProperties.PasswordArn) {
+    throw "PasswordArn should not be provided when using IAM authentication"
+  }
+
+  // For password-based authentication, validate that PasswordArn is provided
+  if (!iamAuthentication && resource === RdsSqlResource.ROLE && !event.ResourceProperties.PasswordArn) {
+    throw "PasswordArn is required when not using IAM authentication"
+  }
 
   // Determine the database engine type
   const engine = secretValues.engine || "postgresql" // Default to postgresql if not specified
